@@ -1,0 +1,4 @@
+# let's add all files that should be ingored for a python project
+__pycache__
+*.pyc
+*.pyo
