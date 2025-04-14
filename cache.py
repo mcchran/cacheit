@@ -116,7 +116,7 @@ class CachePipeline(ABC):
 
 class Cache:
     """
-    A distributed LRU cache implementation using an abstract storage backend.
+    An LRU cache implementation using an abstract storage backend.
     This allows multiple Python processes across different machines to share cache data.
     """
     

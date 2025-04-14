@@ -1,6 +1,7 @@
-from cache import DistributedLRUCache, lru_cache
+from cache import Cache
+from decos import lru_cache
 # from memory_store import CleanMemoryStore
-from shared_memory_store import SharedMemoryStore as CleanMemoryStore
+from memory_store import CleanMemoryStore
 import time
 
 # the way to use the library
@@ -8,7 +9,7 @@ if __name__ == "__main__":
    
     # Example with in-memory storage (for testing or single process use)
     memory_store = CleanMemoryStore(cleanup_interval=5)
-    memory_cache = DistributedLRUCache(
+    memory_cache = Cache(
         store=memory_store,
         max_size=1000,
         ttl=60 * 60  # 1 hour

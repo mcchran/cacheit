@@ -2,13 +2,13 @@
 from functools import wraps
 from typing import Callable, Any, Optional
 
-from cache import DistributedLRUCache
+from cache import Cache
 
 def lru_cache(
     function: Optional[Callable] = None,
     ttl: Optional[int] = None,
     key_prefix: str = "",
-    cache_instance: Optional[DistributedLRUCache] = None
+    cache_instance: Optional[Cache] = None
 ) -> Callable:
     """
     Decorator to use the distributed LRU cache.
