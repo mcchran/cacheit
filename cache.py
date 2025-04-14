@@ -1,8 +1,7 @@
 import pickle
 import hashlib
 from abc import ABC, abstractmethod
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, TypeVar, Union
 
 T = TypeVar('T')
 
@@ -115,7 +114,7 @@ class CachePipeline(ABC):
         pass
 
 
-class DistributedLRUCache:
+class Cache:
     """
     A distributed LRU cache implementation using an abstract storage backend.
     This allows multiple Python processes across different machines to share cache data.
