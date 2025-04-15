@@ -1,8 +1,10 @@
 from memory_store import MemoryStore, MemoryPipeline
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import unittest
+import threading
 import time
+
 
 class TestMemoryStore(unittest.TestCase):
     def setUp(self):
@@ -202,3 +204,235 @@ class TestMemoryStore(unittest.TestCase):
         pipeline = self.store.pipeline()
         self.assertIsInstance(pipeline, MemoryPipeline)
         self.assertEqual(pipeline.store, self.store)
+
+
+class TestMemoryPipeline(unittest.TestCase):
+    """Unit tests for the thread-safe MemoryPipeline class."""
+
+    def setUp(self):
+        """Set up test fixtures before each test method."""
+        self.store = MemoryStore()
+        self.pipeline = MemoryPipeline(self.store)
+
+    def test_init(self):
+        """Test initialization of the MemoryPipeline."""
+        self.assertEqual(self.pipeline.operations, [])
+        self.assertIs(self.pipeline.store, self.store)
+        # let's assert we have a lock attached -- that is tricky
+        # caouse the threading.RLock comes from a c binding and returns an _thread.Rlock type
+        self.assertIsInstance(self.pipeline._lock, type(threading.RLock()))
+
+    def test_get_operation(self):
+        """Test adding a get operation to the pipeline."""
+        result = self.pipeline.get("test_key")
+        self.assertEqual(self.pipeline.operations, [("get", "test_key")])
+        self.assertIs(result, self.pipeline)  # Should return self for chaining
+
+    def test_set_operation(self):
+        """Test adding a set operation to the pipeline."""
+        value = b"test_value"
+        result = self.pipeline.set("test_key", value, 3600)
+        self.assertEqual(self.pipeline.operations, [("set", "test_key", value, 3600)])
+        self.assertIs(result, self.pipeline)
+
+    def test_setex_operation(self):
+        """Test adding a setex operation to the pipeline."""
+        value = b"test_value"
+        result = self.pipeline.setex("test_key", 3600, value)
+        self.assertEqual(self.pipeline.operations, [("set", "test_key", value, 3600)])
+        self.assertIs(result, self.pipeline)
+
+    def test_delete_operation(self):
+        """Test adding a delete operation to the pipeline."""
+        result = self.pipeline.delete("test_key")
+        self.assertEqual(self.pipeline.operations, [("delete", "test_key")])
+        self.assertIs(result, self.pipeline)
+
+    def test_lrem_operation(self):
+        """Test adding an lrem operation to the pipeline."""
+        result = self.pipeline.lrem("test_key", 1, "value")
+        self.assertEqual(self.pipeline.operations, [("lrem", "test_key", 1, "value")])
+        self.assertIs(result, self.pipeline)
+
+    def test_rpush_operation(self):
+        """Test adding an rpush operation to the pipeline."""
+        result = self.pipeline.rpush("test_key", "value1", "value2")
+        self.assertEqual(
+            self.pipeline.operations, [("rpush", "test_key", ("value1", "value2"))]
+        )
+        self.assertIs(result, self.pipeline)
+
+    def test_incr_operation(self):
+        """Test adding an incr operation to the pipeline."""
+        result = self.pipeline.incr("test_key")
+        self.assertEqual(self.pipeline.operations, [("incr", "test_key")])
+        self.assertIs(result, self.pipeline)
+
+    def test_decr_operation(self):
+        """Test adding a decr operation to the pipeline."""
+        result = self.pipeline.decr("test_key")
+        self.assertEqual(self.pipeline.operations, [("decr", "test_key")])
+        self.assertIs(result, self.pipeline)
+
+    def test_execute_empty_operations(self):
+        """Test execute with no operations."""
+        results = self.pipeline.execute()
+        self.assertEqual(results, [])
+        self.assertEqual(self.pipeline.operations, [])
+
+    def test_execute_operations(self):
+        """Test executing a mix of operations."""
+        # Setup pipeline with various operations
+        value = b"test_value"
+        self.pipeline.get("key1").set("key2", value, 3600).delete("key3")
+
+        # Mock the store methods to verify they're called correctly
+        with patch.object(
+            self.store, "get", return_value=value
+        ) as mock_get, patch.object(
+            self.store, "set", return_value=True
+        ) as mock_set, patch.object(
+            self.store, "delete", return_value=True
+        ) as mock_delete:
+
+            results = self.pipeline.execute()
+
+            # Check results and method calls
+            self.assertEqual(results, [value, True, True])
+            mock_get.assert_called_once_with("key1")
+            mock_set.assert_called_once_with("key2", value, 3600)
+            mock_delete.assert_called_once_with("key3")
+
+        # Operations should be cleared after execute
+        self.assertEqual(self.pipeline.operations, [])
+
+    def test_operations_cleared_after_execute(self):
+        """Test that operations list is cleared after execute."""
+        self.pipeline.get("test_key")
+        self.pipeline.execute()
+        self.assertEqual(self.pipeline.operations, [])
+
+    def test_chained_operations(self):
+        """Test that operations can be chained."""
+        value = b"test_value"
+        self.pipeline.get("key1").set("key2", value).incr("key3").decr("key4")
+
+        expected_operations = [
+            ("get", "key1"),
+            ("set", "key2", value, None),
+            ("incr", "key3"),
+            ("decr", "key4"),
+        ]
+
+        self.assertEqual(self.pipeline.operations, expected_operations)
+
+    def test_thread_safety(self):
+        """Test thread safety by having multiple threads add operations."""
+
+        def add_operations(pipeline, prefix, count):
+            for i in range(count):
+                pipeline.set(f"{prefix}_key_{i}", f"value_{i}".encode())
+                pipeline.get(f"{prefix}_key_{i}")
+
+        threads = []
+        num_threads = 10
+        operations_per_thread = 100
+
+        # Start multiple threads to add operations
+        for i in range(num_threads):
+            thread = threading.Thread(
+                target=add_operations,
+                args=(self.pipeline, f"thread_{i}", operations_per_thread),
+            )
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Check that all operations were added
+        total_expected_operations = (
+            num_threads * operations_per_thread * 2
+        )  # Each thread adds 2 operations per iteration
+        self.assertEqual(len(self.pipeline.operations), total_expected_operations)
+
+        # Execute and verify operations are cleared
+        self.pipeline.execute()
+        self.assertEqual(len(self.pipeline.operations), 0)
+
+    def test_concurrent_execute(self):
+        """Test concurrent execute calls."""
+        # Add some initial operations
+        for i in range(50):
+            self.pipeline.set(f"key_{i}", f"value_{i}".encode())
+
+        results = []
+        execution_counts = []
+
+        def execute_and_add_operations(pipeline, prefix, count):
+            # Execute current operations
+            res = pipeline.execute()
+            results.append(len(res))
+
+            # Add new operations
+            for i in range(count):
+                pipeline.set(f"{prefix}_key_{i}", f"value_{i}".encode())
+                pipeline.get(f"{prefix}_key_{i}")
+
+            # Execute again and record how many operations were executed
+            res = pipeline.execute()
+            execution_counts.append(len(res))
+
+        threads = []
+        num_threads = 5
+        operations_per_thread = 20
+
+        # Start multiple threads to execute and add operations
+        for i in range(num_threads):
+            thread = threading.Thread(
+                target=execute_and_add_operations,
+                args=(self.pipeline, f"concurrent_{i}", operations_per_thread),
+            )
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Verify operations are cleared after all executions
+        self.assertEqual(len(self.pipeline.operations), 0)
+
+        # Verify that all added operations were executed
+        total_operations_executed = sum(results) + sum(execution_counts)
+        expected_operations = 50 + (num_threads * operations_per_thread * 2)
+        self.assertEqual(total_operations_executed, expected_operations)
+
+    def test_execute_with_exception(self):
+        """Test behavior when store methods raise exceptions."""
+        # Setup pipeline with operations
+        self.pipeline.get("key1").set("key2", b"value2")
+
+        # Make the store's get method raise an exception
+        self.store.get = Mock(side_effect=Exception("Test exception"))
+
+        # Execute should continue processing operations despite exceptions
+        with self.assertRaises(Exception):
+            self.pipeline.execute()
+
+        # Operations should still be cleared
+        self.assertEqual(self.pipeline.operations, [])
+
+    def test_lock_reentrance(self):
+        """Test that the RLock is reentrant (same thread can acquire multiple times)."""
+        # This is testing internal implementation, so we'll manipulate the lock directly
+        self.pipeline._lock.acquire()
+        try:
+            # This should not block since RLock is reentrant
+            self.pipeline._lock.acquire()
+            self.pipeline._lock.release()
+        finally:
+            self.pipeline._lock.release()
+
+        # If we get here without deadlock, the test passes

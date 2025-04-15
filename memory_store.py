@@ -1,6 +1,9 @@
 from cache import CacheStore, CachePipeline
 from typing import Any, List, Optional
+
+import threading
 import time
+
 
 class MemoryStore(CacheStore):
     """In-memory implementation of the CacheStore interface (for testing)."""
@@ -118,47 +121,64 @@ class MemoryStore(CacheStore):
 
 
 class MemoryPipeline(CachePipeline):
-    """In-memory implementation of the CachePipeline interface."""
+    """Thread-safe in-memory implementation of the CachePipeline interface."""
 
     def __init__(self, store: MemoryStore):
         self.store = store
         self.operations = []
+        self._lock = threading.RLock()  # Reentrant lock to allow nested acquire/release
 
     def get(self, key: str):
-        self.operations.append(("get", key))
+        with self._lock:
+            self.operations.append(("get", key))
         return self
 
     def set(self, key: str, value: bytes, ttl: Optional[int] = None):
-        self.operations.append(("set", key, value, ttl))
+        with self._lock:
+            self.operations.append(("set", key, value, ttl))
         return self
 
     def setex(self, key: str, ttl: int, value: bytes):
-        self.operations.append(("set", key, value, ttl))
+        with self._lock:
+            self.operations.append(("set", key, value, ttl))
         return self
 
     def delete(self, key: str):
-        self.operations.append(("delete", key))
+        with self._lock:
+            self.operations.append(("delete", key))
         return self
 
     def lrem(self, key: str, count: int, value: str):
-        self.operations.append(("lrem", key, count, value))
+        with self._lock:
+            self.operations.append(("lrem", key, count, value))
         return self
 
     def rpush(self, key: str, *values: str):
-        self.operations.append(("rpush", key, values))
+        with self._lock:
+            self.operations.append(("rpush", key, values))
         return self
 
     def incr(self, key: str):
-        self.operations.append(("incr", key))
+        with self._lock:
+            self.operations.append(("incr", key))
         return self
 
     def decr(self, key: str):
-        self.operations.append(("decr", key))
+        with self._lock:
+            self.operations.append(("decr", key))
         return self
 
     def execute(self) -> List[Any]:
+        with self._lock:
+            # Create a local copy of operations and clear the original list
+            # All within the same lock context
+            operations_to_execute = self.operations.copy()
+            self.operations = []
+
+        # Execute operations outside the lock to avoid holding the lock
+        # during potentially lengthy operations
         results = []
-        for op in self.operations:
+        for op in operations_to_execute:
             op_name = op[0]
             if op_name == "get":
                 results.append(self.store.get(op[1]))
@@ -178,7 +198,6 @@ class MemoryPipeline(CachePipeline):
             elif op_name == "decr":
                 results.append(self.store.decr(op[1]))
 
-        self.operations = []
         return results
 
 
@@ -194,8 +213,6 @@ class CleanMemoryStore(MemoryStore):
 
     def _start_cleanup_thread(self):
         """Start a background thread to clean up expired items."""
-        import threading
-
         def cleanup_task():
             while True:
                 print("Cleaning up expired keys...")
